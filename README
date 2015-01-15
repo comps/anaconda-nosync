@@ -1,0 +1,107 @@
+This is a "hack" to speed up installations using Anaconda (RHEL/Fedora/..), but
+it can be easily ported to other distros or even non-installation environments
+(though you *will* lose data if you're not careful enough).
+
+Why it is useful
+================
+
+RPM tries to achieve data consistency by having a considerable amount of sync(2)
+requests - for valid reasons. The downside is that, as a result, it is quite
+slow. There are cases where we want to trade this safety for performance,
+ie. when we don't care about the system being unusable after a power loss, like
+during installation (since we can just restart it). This page describes one of
+the ways how to achieve that.
+
+How it works
+============
+
+The idea is simple - use LD_PRELOAD (glibc feature, see ld.so(8)) to override
+sync() and all its variants, so that it does nothing. The challenge is how to
+do this in anaconda, with the limited toolset available in dracut, and for all
+spawned rpm-related processes, which are not descendants of the %pre shell.
+
+The first problem is making the overriding nosync.so in anaconda - there's no
+gcc available in %pre and unless we want to install it (no repos set up at this
+point), we need to provide it in compiled form. We can either download it from
+somewhere (extra dependency on an external server) or provide it in, say,
+base64 in the %pre itself. However base64(1) is not in dracut, so we need
+ideally a bash-only way. Turns out we can escape the binary data as hex values
+and use printf(1) (well, bash builtin) to re-create the binary itself - not as
+efficiently as base64, but in a working way. Since ie. gzip is available in
+dracut, we can compress the library before making it a hex string.
+
+Now that we have a way to create the nosync.so library in dracut, we need to
+make the entire system (ideally) use it, but just for the installation. We
+can't simply export LD_PRELOAD from the current shell (which is a child of the
+anaconda process) or put it in, say, /etc/profile, because anaconda is already
+running and doesn't spawn a shell for anaconda-yum when executing it for
+%packages installation. The ld.so(8) manpage, however, mentions - at its very
+bottom - a list of FILES, one of them being /etc/ld.so.preload,
+  "File containing a whitespace-separated list of ELF shared libraries to be
+   loaded before the program.",
+exactly what we need. The solution is to therefore simply echo the (full) path
+to nosync.so to this file (creating it).
+
+Limitations
+===========
+
+Note that disabling sync for the entire userspace speeds up not only rpm, but
+also mkfs and other tools. Also note that by disabling sync(), we rely on the
+kernel to do the writeback syncing, meaning the system needs to be shut down
+(rebooted) cleanly after installation, which is fortunately usual.
+
+Also note that nosync.so here is an ELF lib, arch-specific, so you need
+to compile it on the same arch and bitness. This may complicate the kickstart
+a bit (if it is multi-platform), but one can use uname -m and conditions to
+select the proper hex string.
+
+I've tried to pick as portable / common tools in the Makefile as possible,
+ie no 'xxd', the 'od' binary should be in coreutils (hopefully installed)
+and 'sed' should be present too.
+
+How to use it
+=============
+
+See Makefile, it should be pretty self-explanatory.
+
+You can use nosync.so directly if you package your own anaconda image, in which
+case, do simply:
+
+$ make
+
+and in the anaconda image (assuming you unpack the lib as /nosync.so):
+
+  chmod +x /nosync.so
+  echo /nosync.so > /etc/ld.so.preload
+
+If you, on the other hand, have just a kickstart file available, you can
+generate the hex-encoded files (uncompressed and gzip-compressed) with:
+
+$ make ascii
+
+and then use the nosync.gz.txt file in %pre of the kickstart like:
+
+  nosync_bin="<contents of nosync.gz.txt here>"
+  printf "$nosync_bin" | gzip -d > /nosync.so
+  chmod +x /nosync.so
+  echo /nosync.so > /etc/ld.so.preload
+
+Benchmarks
+==========
+
+The limited number of benchmarks I've done shows a speedup of approximately
+two times compared to the normal install.
+
+ie.
+normal: 597sec
+nosync: 314sec
+
+Feel free to benchmark this for yourself, especially when installing large
+(>1000) %packages sets.
+
+Thanks
+======
+
+Inspired by cache=unsafe QEMU/KVM installs. :)
+
+# vim: syntax=off :
