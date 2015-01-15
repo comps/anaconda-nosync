@@ -99,6 +99,12 @@ nosync: 314sec
 Feel free to benchmark this for yourself, especially when installing large
 (>1000) %packages sets.
 
+Note that when using storage with fast random access writes, you won't notice
+much difference - this includes SSDs, BBU-based RAID cards, certain storage
+abstractions which return sync() immediately (some SAN implementations / iscsi)
+or virtualization solutions that do the same (QEMU cache=unsafe, VirtualBox I/O
+caching mode, etc.).
+
 Thanks
 ======
 
